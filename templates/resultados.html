@@ -93,6 +93,105 @@
       <p>😊 No hay mensajes con informe de errores</p>
     </div>
   {% endif %}
+  {% if historial %}
+  <!-- ===== Historial y gráfico con filtros ===== -->
+  <section class="historial">
+    <h2>📈 Gráfico del historial</h2>
+    <div class="filtros">
+      <label>Día:
+        <select id="filtro-dia"><option value="">Todos</option></select>
+      </label>
+      <label>Empresa:
+        <select id="filtro-empresa"><option value="">Todas</option></select>
+      </label>
+      <a class="btn-exportar" href="/exportar/csv">📄 CSV</a>
+      <a class="btn-exportar" href="/exportar/excel">📊 Excel</a>
+      <a class="btn-borrar" href="/borrar_historial"
+         onclick="return confirm('¿Borrar todo el historial?')">🗑 Borrar historial</a>
+    </div>
+    <div id="grafico" class="grafico-barras"></div>
+    <p class="pista">Sin filtros se agrupa por día. Elige un día para ver las
+      empresas de ese día, o una empresa para ver su evolución por día.</p>
+  </section>
+
+  <script>
+    const HISTORIAL = {{ historial | tojson }};
+
+    const datos = HISTORIAL.map(r => ({
+      empresa: r.empresa || '(sin empresa)',
+      dia: (r.fecha_correo || r.procesado || '').split(' ')[0],
+      errores: r.errores
+    }));
+
+    const selDia = document.getElementById('filtro-dia');
+    const selEmpresa = document.getElementById('filtro-empresa');
+    const cont = document.getElementById('grafico');
+
+    function llenar(select, valores, textoVacio, descendente) {
+      select.innerHTML = '';
+      const vacio = document.createElement('option');
+      vacio.value = ''; vacio.textContent = textoVacio;
+      select.appendChild(vacio);
+      const lista = [...new Set(valores)].sort();
+      if (descendente) lista.reverse();
+      lista.forEach(v => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        select.appendChild(o);
+      });
+    }
+
+    llenar(selDia, datos.map(d => d.dia), 'Todos', true);
+    llenar(selEmpresa, datos.map(d => d.empresa), 'Todas', false);
+
+    function render() {
+      const dia = selDia.value;
+      const empresa = selEmpresa.value;
+      const filtrados = datos.filter(d =>
+        (!dia || d.dia === dia) && (!empresa || d.empresa === empresa));
+
+      // Elegimos el eje del gráfico según el filtro activo
+      let clave;
+      if (dia && empresa) clave = () => 'Resumen';
+      else if (dia) clave = d => d.empresa;
+      else clave = d => d.dia;   // sin día, con o sin empresa
+
+      const grupos = {};
+      filtrados.forEach(d => {
+        const k = clave(d);
+        grupos[k] = grupos[k] || {errores: 0, correos: 0};
+        grupos[k].errores += d.errores;
+        grupos[k].correos += 1;
+      });
+
+      const claves = Object.keys(grupos).sort();
+      cont.innerHTML = '';
+      if (!claves.length) {
+        cont.innerHTML = '<p class="sin-datos">Sin datos para este filtro.</p>';
+        return;
+      }
+      const max = Math.max(1, ...claves.map(k => grupos[k].errores));
+      claves.forEach(k => {
+        const g = grupos[k];
+        const fila = document.createElement('div');
+        fila.className = 'fila-grafico';
+        const clase = g.errores === 0 ? 'verde' : 'rojo';
+        fila.innerHTML =
+          '<span class="etiq">' + k + '</span>' +
+          '<div class="pista-barra"><div class="barra ' + clase + '" style="width:' +
+          Math.max(3, g.errores / max * 100) + '%"></div></div>' +
+          '<span class="valor ' + clase + '-texto">' + g.errores +
+          ' <small>(' + g.correos + ' corr.)</small></span>';
+        cont.appendChild(fila);
+      });
+    }
+
+    selDia.addEventListener('change', render);
+    selEmpresa.addEventListener('change', render);
+    render();
+  </script>
+  {% endif %}
+
   <script>
     // Al pulsar "Repetir revisión" mostramos el indicador de carga.
     document.querySelectorAll('a.btn-repetir').forEach(enlace => {

@@ -184,6 +184,67 @@ button:disabled { opacity: .5; cursor: wait; }
 .final-ok   { color: #66bb6a; }
 .final-fallo { color: #ef5350; }
 
+/* ===== Historial y gráfico ===== */
+.historial {
+  max-width: 1000px;
+  margin: 40px auto 0;
+  background: #1f2a44;
+  border-radius: 12px;
+  padding: 26px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.historial h2 { font-size: 20px; margin-bottom: 18px; }
+
+.filtros { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
+.filtros label { display: flex; align-items: center; gap: 8px; margin: 0; color: #aebfdd; font-size: 14px; }
+.filtros select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #3a4a6b;
+  background: #141d33;
+  color: #fff;
+  font-size: 14px;
+}
+.btn-exportar {
+  color: #64b5f6;
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid #2b4a68;
+  padding: 7px 12px;
+  border-radius: 8px;
+}
+.btn-exportar:hover { background: #24344f; }
+.btn-borrar {
+  margin-left: auto;
+  color: #ef9a9a;
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid #4a2b2f;
+  padding: 7px 12px;
+  border-radius: 8px;
+}
+.btn-borrar:hover { background: #3a2226; }
+
+.grafico-barras { display: flex; flex-direction: column; gap: 10px; }
+.fila-grafico { display: flex; align-items: center; gap: 12px; }
+.fila-grafico .etiq {
+  width: 220px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #c5d3ec;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pista-barra { flex: 1; height: 18px; background: #141d33; border-radius: 9px; overflow: hidden; }
+.barra { height: 100%; border-radius: 9px; transition: width .4s; }
+.barra.verde { background: linear-gradient(90deg, #43a047, #66bb6a); }
+.barra.rojo { background: linear-gradient(90deg, #c62828, #ef5350); }
+.fila-grafico .valor { width: 110px; text-align: right; font-weight: bold; font-size: 14px; }
+.fila-grafico .valor small { color: #8fa3c7; font-weight: normal; }
+.sin-datos { color: #8fa3c7; text-align: center; padding: 12px; }
+.pista { margin-top: 14px; font-size: 12px; color: #7d8fb0; }
+
 .vacio {
   max-width: 1000px;
   margin: 40px auto;

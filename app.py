@@ -13,19 +13,28 @@ Flujo:
 Nota de seguridad: las credenciales NO se guardan en disco ni en sesión;
 se usan solo para la conexión IMAP de esa petición.
 """
+import csv
 import email
 import imaplib
+import io
+import json
+import os
 import re
+from datetime import datetime
 from email.header import decode_header
 from html.parser import HTMLParser
 from email.utils import parsedate_to_datetime
 
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, redirect, render_template, request, send_file, session, url_for
 
 app = Flask(__name__)
 app.secret_key = "cambia-esto-por-algo-aleatorio"
 
 IMAP_HOST = "imap.gmail.com"
+
+# Archivo donde se guarda el historial de todas las revisiones
+HISTORIAL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "historial.json")
 
 # Patrones de búsqueda en el cuerpo
 PATRON_NUMERO_ERRORES = re.compile(
@@ -150,16 +159,20 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
         encontrados = 0
 
         for mail_id in ids:
-            status, datos = mail.fetch(mail_id, "(RFC822)")
+            # BODY.PEEK[] descarga el mensaje SIN marcarlo como leído
+            # (RFC822 a secas sí lo marcaría automáticamente).
+            status, datos = mail.fetch(mail_id, "(BODY.PEEK[])")
             for parte in datos:
                 if not isinstance(parte, tuple) or len(parte) < 2:
                     continue
                 msg = email.message_from_bytes(parte[1])
 
-                asunto = decodificar_cabecera(msg.get("Subject")) or "(sin asunto)"
+                asunto = decodificar_cabecera(
+                    msg.get("Subject")) or "(sin asunto)"
                 fecha = msg.get("Date", "")
                 try:
-                    fecha = parsedate_to_datetime(fecha).strftime("%d/%m/%Y %H:%M")
+                    fecha = parsedate_to_datetime(
+                        fecha).strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     pass
 
@@ -168,6 +181,8 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
 
                 if not hay_informe:
                     # No habla de errores -> se deja como no leído.
+                    # Quitamos \Seen por si el servidor lo hubiera marcado.
+                    mail.store(mail_id, "-FLAGS", "\\Seen")
                     continue
 
                 encontrados += 1
@@ -177,6 +192,9 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
                 if errores == 0 or marcar_leidos_con_errores:
                     mail.store(mail_id, "+FLAGS", "\\Seen")
                     leidos += 1
+                else:
+                    # Con errores -> se deja como no leído (por seguridad).
+                    mail.store(mail_id, "-FLAGS", "\\Seen")
 
         estadisticas = {
             "no_leidos": len(ids),
@@ -193,6 +211,62 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
             mail.logout()
         except Exception:
             pass
+
+
+# --------------------------------------------------------------------------
+# Historial (se guarda en historial.json)
+# --------------------------------------------------------------------------
+# Los asuntos suelen terminar con la fecha, ej:
+#   "CRUZILA TRABAJOS Mon, 28 Sep 2026 17:31:17 +0200"
+#   "ESTUDIO BACKUP Mon, 28 Sep 2026 18:47:05 -0300"
+PATRON_FECHA_EN_ASUNTO = re.compile(
+    r"\s*\b(?:lun|mar|mi[eé]|jue|vie|s[aá]b|dom|"
+    r"mon|tue|wed|thu|fri|sat|sun)\b\s*,?\s*\d{1,2}\b.*$",
+    re.IGNORECASE)
+
+
+def derivar_empresa(asunto):
+    """Deduce la "empresa" a partir del asunto.
+
+    Los asuntos tienen la forma "NOMBRE_EMPRESA <fecha opcional>". Se quita
+    la fecha del final (ej: "Mon, 28 Sep 2026 17:31:17 +0200") y lo que
+    queda es la empresa. Si aún quedara un separador (" - ", "|", ":"), se
+    toma la parte de la izquierda.
+    """
+    asunto = (asunto or "").strip()
+    # Quitamos la fecha del final, si la hay
+    asunto = PATRON_FECHA_EN_ASUNTO.sub("", asunto).strip(" -–:|,")
+    # Por si acaso, separamos también por separadores comunes
+    for separador in (" - ", "–", "|"):
+        if separador in asunto:
+            parte = asunto.split(separador)[0].strip()
+            if parte:
+                return parte
+    return asunto or "(sin asunto)"
+
+
+def cargar_historial():
+    try:
+        with open(HISTORIAL_PATH, encoding="utf-8") as archivo:
+            return json.load(archivo)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def guardar_historial(resultados):
+    """Añade los resultados de esta revisión al historial.json."""
+    historial = cargar_historial()
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
+    for r in resultados:
+        historial.append({
+            "procesado": ahora,
+            "fecha_correo": r["fecha"],
+            "asunto": r["asunto"],
+            "empresa": derivar_empresa(r["asunto"]),
+            "errores": r["errores"],
+        })
+    with open(HISTORIAL_PATH, "w", encoding="utf-8") as archivo:
+        json.dump(historial, archivo, ensure_ascii=False, indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -215,42 +289,13 @@ def conectar():
             "index.html",
             error="Escribe tu correo y tu contraseña de aplicación.")
 
-    try:
-        resultados, estadisticas = procesar_correo(
-            usuario, contrasena, marcar_leidos_con_errores)
-    except imaplib.IMAP4.error:
-        return render_template(
-            "index.html",
-            error="Usuario o contraseña incorrectos. Recuerda usar una "
-                  "contraseña de aplicación de Gmail (16 caracteres).")
-    except Exception as exc:  # error de red, etc.
-        return render_template(
-            "index.html", error=f"No se pudo conectar: {exc}")
-
     # Guardamos las credenciales en la sesión (cookie firmada) para poder
     # repetir la revisión sin volver a escribirlas. No se guardan en disco.
     session["usuario"] = usuario
     session["contrasena"] = contrasena
     session["marcar_leidos_con_errores"] = marcar_leidos_con_errores
 
-    ordenados = sorted(resultados, key=lambda r: r["errores"], reverse=True)
-    total_errores = sum(r["errores"] for r in resultados)
-    bien = sum(1 for r in resultados if r["errores"] == 0)
-    mal = len(resultados) - bien
-    total = bien + mal
-    porc_bien = round(bien / total * 100, 1) if total else 0.0
-    porc_mal = round(mal / total * 100, 1) if total else 0.0
-
-    return render_template(
-        "resultados.html",
-        resultados=ordenados,
-        stats=estadisticas,
-        total_errores=total_errores,
-        bien=bien,
-        mal=mal,
-        porc_bien=porc_bien,
-        porc_mal=porc_mal,
-    )
+    return _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores)
 
 
 @app.route("/revisar", methods=["GET"])
@@ -272,6 +317,130 @@ def nueva():
     return redirect(url_for("inicio"))
 
 
+CABECERAS_EXPORT = ["Fecha procesado", "Fecha correo",
+                    "Empresa", "Asunto", "Errores"]
+
+
+def _filas_historial():
+    """Convierte el historial en filas listas para exportar."""
+    return [[r.get("procesado", ""),
+             r.get("fecha_correo", ""),
+             r.get("empresa", ""),
+             r.get("asunto", ""),
+             r.get("errores", 0)] for r in cargar_historial()]
+
+
+@app.route("/exportar/csv", methods=["GET"])
+def exportar_csv():
+    """Descarga el historial completo como CSV (compatible con Excel)."""
+    salida = io.StringIO()
+    escritor = csv.writer(salida, delimiter=";")
+    escritor.writerow(CABECERAS_EXPORT)
+    escritor.writerows(_filas_historial())
+
+    # utf-8-sig (BOM) para que Excel muestre bien las tildes y ñ
+    datos = io.BytesIO(salida.getvalue().encode("utf-8-sig"))
+    return send_file(
+        datos,
+        mimetype="text/csv; charset=utf-8",
+        as_attachment=True,
+        download_name="historial_errores.csv",
+    )
+
+
+@app.route("/exportar/excel", methods=["GET"])
+def exportar_excel():
+    """Descarga el historial completo como Excel (.xlsx)."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return render_template(
+            "index.html",
+            error="Para exportar a Excel instala openpyxl: "
+                  "pip install openpyxl (o usa el export CSV).")
+
+    historial = cargar_historial()
+
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = "Historial de errores"
+
+    cabecera_verde = PatternFill("solid", fgColor="2E7D32")
+    for columna, titulo in enumerate(CABECERAS_EXPORT, start=1):
+        celda = hoja.cell(row=1, column=columna, value=titulo)
+        celda.font = Font(bold=True, color="FFFFFF")
+        celda.fill = cabecera_verde
+
+    for fila, datos_fila in enumerate(_filas_historial(), start=2):
+        for columna, valor in enumerate(datos_fila, start=1):
+            hoja.cell(row=fila, column=columna, value=valor)
+
+    # Anchos de columna orientativos
+    for columna, ancho in zip("ABCDE", (18, 18, 28, 40, 10)):
+        hoja.column_dimensions[columna].width = ancho
+    hoja.freeze_panes = "A2"
+
+    # ===== Hoja resumen: totales por día y por empresa =====
+    resumen = libro.create_sheet("Resumen")
+
+    def escribir_tabla(fila_inicio, titulo, clave, etiqueta):
+        celda = resumen.cell(row=fila_inicio, column=1, value=titulo)
+        celda.font = Font(bold=True, size=12)
+        agregados = {}
+        for r in historial:
+            k = r.get(clave, "(sin dato)") or "(sin dato)"
+            agregados.setdefault(k, {"correos": 0, "errores": 0})
+            agregados[k]["correos"] += 1
+            agregados[k]["errores"] += r.get("errores", 0) or 0
+
+        fila = fila_inicio + 1
+        for columna, titulo_col in enumerate(
+                (etiqueta, "Correos", "Errores"), start=1):
+            c = resumen.cell(row=fila, column=columna, value=titulo_col)
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = cabecera_verde
+        for k in sorted(agregados):
+            fila += 1
+            datos = agregados[k]
+            resumen.cell(row=fila, column=1, value=k)
+            resumen.cell(row=fila, column=2, value=datos["correos"])
+            c_err = resumen.cell(row=fila, column=3, value=datos["errores"])
+            if datos["errores"] > 0:
+                c_err.font = Font(bold=True, color="C62828")
+        return fila
+
+    ultima_fila = escribir_tabla(1, "Totales por día", "fecha_correo", "Día")
+    escribir_tabla(ultima_fila + 3, "Totales por empresa",
+                   "empresa", "Empresa")
+
+    for columna, ancho in zip("ABC", (32, 12, 12)):
+        resumen.column_dimensions[columna].width = ancho
+
+    buffer = io.BytesIO()
+    libro.save(buffer)
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype="application/vnd.openxmlformats-officedocument"
+                 ".spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="historial_errores.xlsx",
+    )
+
+
+@app.route("/borrar_historial", methods=["GET"])
+def borrar_historial():
+    """Vacía el archivo de historial."""
+    try:
+        os.remove(HISTORIAL_PATH)
+    except FileNotFoundError:
+        pass
+    if "usuario" in session and "contrasena" in session:
+        return redirect(url_for("revisar"))
+    return redirect(url_for("inicio"))
+
+
 def _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores):
     """Ejecuta la revisión y pinta la página de resultados (o el error)."""
     try:
@@ -286,6 +455,8 @@ def _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores):
     except Exception as exc:  # error de red, etc.
         return render_template(
             "index.html", error=f"No se pudo conectar: {exc}")
+
+    guardar_historial(resultados)
 
     ordenados = sorted(resultados, key=lambda r: r["errores"], reverse=True)
     total_errores = sum(r["errores"] for r in resultados)
@@ -304,6 +475,7 @@ def _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores):
         mal=mal,
         porc_bien=porc_bien,
         porc_mal=porc_mal,
+        historial=cargar_historial(),
     )
 
 
