@@ -54,5 +54,46 @@
     "asunto": "SAVIA ZEUS",
     "empresa": "SAVIA ZEUS",
     "errores": 57
+  },
+  {
+    "procesado": "2026-09-29 16:42",
+    "fecha_correo": "29/09/2026 16:21",
+    "asunto": "ALPHA NUEVA VIDA",
+    "empresa": "ALPHA NUEVA VIDA",
+    "errores": 0
+  },
+  {
+    "procesado": "2026-09-29 16:54",
+    "fecha_correo": "29/09/2026 09:41",
+    "asunto": "Copia de seguridad completado satisfactoriamente - Notificación de Acronis True Image de Server_01",
+    "empresa": "Copia de seguridad completado satisfactoriamente",
+    "errores": 0,
+    "tipo": "acronis",
+    "correcto": true
+  },
+  {
+    "procesado": "2026-09-29 17:01",
+    "fecha_correo": "29/09/2026 11:30",
+    "asunto": "SAVIA ZEUS",
+    "empresa": "SAVIA ZEUS",
+    "errores": 57,
+    "tipo": "cobian"
+  },
+  {
+    "procesado": "2026-09-29 17:01",
+    "fecha_correo": "29/09/2026 16:21",
+    "asunto": "ALPHA NUEVA VIDA",
+    "empresa": "ALPHA NUEVA VIDA",
+    "errores": 0,
+    "tipo": "cobian"
+  },
+  {
+    "procesado": "2026-09-29 17:01",
+    "fecha_correo": "29/09/2026 09:41",
+    "asunto": "Copia de seguridad completado satisfactoriamente - Notificación de Acronis True Image de Server_01",
+    "empresa": "Copia de seguridad completado satisfactoriamente",
+    "errores": 0,
+    "tipo": "acronis",
+    "correcto": true
   }
 ]

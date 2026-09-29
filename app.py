@@ -20,6 +20,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime
 from email.header import decode_header
 from html.parser import HTMLParser
@@ -46,6 +47,33 @@ PATRON_SIN_ERRORES = re.compile(r"sin\s+errores", re.IGNORECASE)
 # --------------------------------------------------------------------------
 # Utilidades de correo
 # --------------------------------------------------------------------------
+def sin_tildes(texto):
+    """Minúsculas sin tildes, para comparar textos sin preocuparse de acentos."""
+    normalizado = unicodedata.normalize("NFD", texto or "")
+    return "".join(c for c in normalizado if not unicodedata.combining(c)).lower()
+
+
+def texto_normalizado(texto):
+    """Minúsculas, sin tildes y con espacios/saltos de línea colapsados.
+
+    Así una frase partida en varias líneas o con espacios dobles se detecta
+    igual que escrita en una sola línea.
+    """
+    return re.sub(r"\s+", " ", sin_tildes(texto)).strip()
+
+
+# Frase de éxito de Acronis, tolerante a variantes:
+#   "La operación se ha efectuado correctamente"
+#   "La operación se ha completado correctamente"
+#   "La operación se ha realizado correctamente"
+#   "... con éxito"
+PATRON_OK_ACRONIS = re.compile(
+    r"la\s+operaci[oó]n\s+se\s+ha\s+"
+    r"(?:efectuado|completado|realizado|ejecutado)\s+"
+    r"(?:correctamente|con\s+[eé]xito\b|sin\s+errores\b)",
+    re.IGNORECASE)
+
+
 def decodificar_cabecera(valor):
     """Decodifica una cabecera MIME (ej: el Asunto)."""
     if not valor:
@@ -142,9 +170,10 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
     """
     Se conecta a Gmail y procesa los correos no leídos.
 
-    Devuelve (resultados, estadisticas):
-      resultados: lista de dicts {asunto, fecha, errores}
-      estadisticas: dict con contadores para el resumen.
+    Devuelve (resultados, acronis, estadisticas):
+        resultados: Cobian -> lista de dicts {asunto, fecha, errores}
+        acronis:    Acronis -> lista de dicts {asunto, fecha, correcto}
+        estadisticas: dict con contadores para el resumen.
     """
     mail = imaplib.IMAP4_SSL(IMAP_HOST)
     try:
@@ -154,9 +183,12 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
         status, mensajes = mail.search(None, "UNSEEN")
         ids = mensajes[0].split() if mensajes and mensajes[0] else []
 
-        resultados = []
+        resultados = []      # informes Cobian
+        acronis = []         # notificaciones Acronis True Image
         leidos = 0
         encontrados = 0
+        acronis_ok = 0
+        acronis_error = 0
 
         for mail_id in ids:
             # BODY.PEEK[] descarga el mensaje SIN marcarlo como leído
@@ -177,6 +209,32 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
                     pass
 
                 cuerpo = obtener_cuerpo(msg)
+
+                # ===== Notificaciones de Acronis True Image =====
+                # Se detecta por el asunto o por el cuerpo del mensaje.
+                cuerpo_norm = texto_normalizado(cuerpo)
+                es_acronis = (
+                    "acronis" in sin_tildes(asunto)
+                    or "true image" in sin_tildes(asunto)
+                    or "acronis" in cuerpo_norm)
+
+                if es_acronis:
+                    correcto = bool(PATRON_OK_ACRONIS.search(cuerpo_norm))
+                    print(f"[ACRONIS] {asunto!r} -> "
+                          f"{'OK' if correcto else 'ERROR'}")
+                    acronis.append(
+                        {"asunto": asunto, "fecha": fecha,
+                         "correcto": correcto})
+                    if correcto:
+                        acronis_ok += 1
+                        mail.store(mail_id, "+FLAGS", "\\Seen")
+                        leidos += 1
+                    else:
+                        # Dice otra cosa -> error, queda como no leído.
+                        acronis_error += 1
+                        mail.store(mail_id, "-FLAGS", "\\Seen")
+                    continue
+
                 hay_informe, errores = extraer_errores(cuerpo)
 
                 if not hay_informe:
@@ -200,8 +258,10 @@ def procesar_correo(usuario, contrasena, marcar_leidos_con_errores=False):
             "no_leidos": len(ids),
             "encontrados": encontrados,
             "leidos": leidos,
+            "acronis_ok": acronis_ok,
+            "acronis_error": acronis_error,
         }
-        return resultados, estadisticas
+        return resultados, acronis, estadisticas
     finally:
         try:
             mail.close()
@@ -253,7 +313,7 @@ def cargar_historial():
         return []
 
 
-def guardar_historial(resultados):
+def guardar_historial(resultados, acronis):
     """Añade los resultados de esta revisión al historial.json."""
     historial = cargar_historial()
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -264,6 +324,17 @@ def guardar_historial(resultados):
             "asunto": r["asunto"],
             "empresa": derivar_empresa(r["asunto"]),
             "errores": r["errores"],
+            "tipo": "cobian",
+        })
+    for r in acronis:
+        historial.append({
+            "procesado": ahora,
+            "fecha_correo": r["fecha"],
+            "asunto": r["asunto"],
+            "empresa": derivar_empresa(r["asunto"]),
+            "errores": 0 if r["correcto"] else 1,
+            "tipo": "acronis",
+            "correcto": r["correcto"],
         })
     with open(HISTORIAL_PATH, "w", encoding="utf-8") as archivo:
         json.dump(historial, archivo, ensure_ascii=False, indent=2)
@@ -317,17 +388,27 @@ def nueva():
     return redirect(url_for("inicio"))
 
 
-CABECERAS_EXPORT = ["Fecha procesado", "Fecha correo",
-                    "Empresa", "Asunto", "Errores"]
+CABECERAS_EXPORT = ["Fecha procesado", "Fecha correo", "Tipo",
+                    "Empresa", "Asunto", "Errores", "Estado"]
 
 
 def _filas_historial():
     """Convierte el historial en filas listas para exportar."""
-    return [[r.get("procesado", ""),
-             r.get("fecha_correo", ""),
-             r.get("empresa", ""),
-             r.get("asunto", ""),
-             r.get("errores", 0)] for r in cargar_historial()]
+    filas = []
+    for r in cargar_historial():
+        tipo = r.get("tipo", "cobian")
+        if tipo == "acronis":
+            estado = "Correcto" if r.get("correcto") else "Error"
+        else:
+            estado = ""
+        filas.append([r.get("procesado", ""),
+                      r.get("fecha_correo", ""),
+                      tipo,
+                      r.get("empresa", ""),
+                      r.get("asunto", ""),
+                      r.get("errores", 0),
+                      estado])
+    return filas
 
 
 @app.route("/exportar/csv", methods=["GET"])
@@ -358,7 +439,7 @@ def exportar_excel():
         return render_template(
             "index.html",
             error="Para exportar a Excel instala openpyxl: "
-                  "pip install openpyxl (o usa el export CSV).")
+            "pip install openpyxl (o usa el export CSV).")
 
     historial = cargar_historial()
 
@@ -377,7 +458,7 @@ def exportar_excel():
             hoja.cell(row=fila, column=columna, value=valor)
 
     # Anchos de columna orientativos
-    for columna, ancho in zip("ABCDE", (18, 18, 28, 40, 10)):
+    for columna, ancho in zip("ABCDEFG", (18, 18, 10, 28, 40, 10, 12)):
         hoja.column_dimensions[columna].width = ancho
     hoja.freeze_panes = "A2"
 
@@ -389,6 +470,8 @@ def exportar_excel():
         celda.font = Font(bold=True, size=12)
         agregados = {}
         for r in historial:
+            if r.get("tipo", "cobian") == "acronis":
+                continue  # los Acronis van en su propia tabla
             k = r.get(clave, "(sin dato)") or "(sin dato)"
             agregados.setdefault(k, {"correos": 0, "errores": 0})
             agregados[k]["correos"] += 1
@@ -411,8 +494,37 @@ def exportar_excel():
         return fila
 
     ultima_fila = escribir_tabla(1, "Totales por día", "fecha_correo", "Día")
-    escribir_tabla(ultima_fila + 3, "Totales por empresa",
-                   "empresa", "Empresa")
+    ultima_fila = escribir_tabla(
+        ultima_fila + 3, "Totales por empresa", "empresa", "Empresa")
+
+    # ===== Tabla Acronis True Image en la hoja Resumen =====
+    acronis = [r for r in historial if r.get("tipo") == "acronis"]
+    if acronis:
+        fila_ini = ultima_fila + 3
+        celda = resumen.cell(row=fila_ini, column=1,
+                             value="Acronis True Image")
+        celda.font = Font(bold=True, size=12)
+        fila = fila_ini + 1
+        for columna, titulo_col in enumerate(
+                ("Día", "Correctos", "Con error"), start=1):
+            c = resumen.cell(row=fila, column=columna, value=titulo_col)
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = cabecera_verde
+        por_dia = {}
+        for r in acronis:
+            dia = r.get("fecha_correo", "(sin dato)") or "(sin dato)"
+            por_dia.setdefault(dia, {"ok": 0, "mal": 0})
+            if r.get("correcto"):
+                por_dia[dia]["ok"] += 1
+            else:
+                por_dia[dia]["mal"] += 1
+        for dia in sorted(por_dia):
+            fila += 1
+            resumen.cell(row=fila, column=1, value=dia)
+            resumen.cell(row=fila, column=2, value=por_dia[dia]["ok"])
+            c_mal = resumen.cell(row=fila, column=3, value=por_dia[dia]["mal"])
+            if por_dia[dia]["mal"]:
+                c_mal.font = Font(bold=True, color="C62828")
 
     for columna, ancho in zip("ABC", (32, 12, 12)):
         resumen.column_dimensions[columna].width = ancho
@@ -423,7 +535,7 @@ def exportar_excel():
     return send_file(
         buffer,
         mimetype="application/vnd.openxmlformats-officedocument"
-                 ".spreadsheetml.sheet",
+        ".spreadsheetml.sheet",
         as_attachment=True,
         download_name="historial_errores.xlsx",
     )
@@ -444,20 +556,22 @@ def borrar_historial():
 def _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores):
     """Ejecuta la revisión y pinta la página de resultados (o el error)."""
     try:
-        resultados, estadisticas = procesar_correo(
+        resultados, acronis, estadisticas = procesar_correo(
             usuario, contrasena, marcar_leidos_con_errores)
     except imaplib.IMAP4.error:
         session.clear()
         return render_template(
             "index.html",
             error="Usuario o contraseña incorrectos. Recuerda usar una "
-                  "contraseña de aplicación de Gmail (16 caracteres).")
+            "contraseña de aplicación de Gmail (16 caracteres).")
     except Exception as exc:  # error de red, etc.
         return render_template(
             "index.html", error=f"No se pudo conectar: {exc}")
 
-    guardar_historial(resultados)
+    guardar_historial(resultados, acronis)
 
+    acronis_ordenados = sorted(
+        acronis, key=lambda r: (not r["correcto"], r["asunto"]))
     ordenados = sorted(resultados, key=lambda r: r["errores"], reverse=True)
     total_errores = sum(r["errores"] for r in resultados)
     bien = sum(1 for r in resultados if r["errores"] == 0)
@@ -469,6 +583,7 @@ def _ejecutar_revision(usuario, contrasena, marcar_leidos_con_errores):
     return render_template(
         "resultados.html",
         resultados=ordenados,
+        acronis=acronis_ordenados,
         stats=estadisticas,
         total_errores=total_errores,
         bien=bien,

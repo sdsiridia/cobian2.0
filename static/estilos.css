@@ -184,6 +184,8 @@ button:disabled { opacity: .5; cursor: wait; }
 .final-ok   { color: #66bb6a; }
 .final-fallo { color: #ef5350; }
 
+.titulo-acronis { max-width: 1000px; margin: 36px auto 14px; font-size: 20px; }
+
 /* ===== Historial y gráfico ===== */
 .historial {
   max-width: 1000px;
