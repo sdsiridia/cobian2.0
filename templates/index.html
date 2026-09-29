@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monitor de errores de respaldo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='estilos.css') }}">
+</head>
+<body>
+  <div class="card login-card">
+    <div class="titulo">
+      <span class="icono">📧</span>
+      <h1>Monitor de errores</h1>
+      <p class="subtitulo">Revisión de respaldos por correo (Gmail)</p>
+    </div>
+
+    {% if error %}
+      <div class="alerta-error">⚠️ {{ error }}</div>
+    {% endif %}
+
+    <form id="form-login" action="/conectar" method="POST" autocomplete="off">
+      <label for="usuario">Correo de Gmail</label>
+      <input type="email" id="usuario" name="usuario" required
+             placeholder="tucorreo@gmail.com" autofocus>
+
+      <label for="contrasena">Contraseña de aplicación</label>
+      <input type="password" id="contrasena" name="contrasena" required
+             placeholder="abcd efgh ijkl mnop">
+
+      <label class="checkbox">
+        <input type="checkbox" name="marcar_leidos_con_errores">
+        Marcar como leídos también los correos <strong>con</strong> errores
+        <span class="ayuda">(si lo dejas sin marcar, los que tengan errores quedan como no leídos, igual que tu script de Python)</span>
+      </label>
+
+      <button type="submit" id="btn-conectar">Conectar</button>
+    </form>
+
+    <div id="cargando" class="cargando" hidden>
+      <div class="spinner"></div>
+      <p>Leyendo correos… puede tardar unos segundos.</p>
+    </div>
+
+    <div class="nota">
+      <strong>🔒 Importante:</strong> Gmail no acepta tu contraseña normal por
+      IMAP. Necesitas una <em>contraseña de aplicación</em> de 16 caracteres:
+      activa la verificación en dos pasos en tu cuenta de Google y créala en
+      <a href="https://myaccount.google.com/apppasswords" target="_blank">
+        myaccount.google.com/apppasswords</a>.
+      Tus credenciales no se guardan en ningún lugar.
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('form-login');
+    form.addEventListener('submit', () => {
+      document.getElementById('btn-conectar').disabled = true;
+      document.getElementById('cargando').hidden = false;
+    });
+  </script>
+</body>
+</html>

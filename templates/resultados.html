@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resultados — Monitor de errores</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='estilos.css') }}">
+</head>
+<body>
+  <div class="cabecera">
+    <h1>📊 Errores detectados</h1>
+    <div class="botones">
+      <a class="btn-volver btn-repetir" href="/revisar">🔄 Repetir revisión</a>
+      <a class="btn-volver" href="/nueva">👤 Datos nuevos</a>
+    </div>
+  </div>
+
+  <div id="cargando" class="cargando" hidden>
+    <div class="spinner"></div>
+    <p>Leyendo correos… puede tardar unos segundos.</p>
+  </div>
+
+  <!-- ===== Resumen ===== -->
+  <div class="resumen">
+    <div class="tarjeta">
+      <span class="numero">{{ stats.no_leidos }}</span>
+      <span class="etiqueta">Correos no leídos</span>
+    </div>
+    <div class="tarjeta">
+      <span class="numero">{{ stats.encontrados }}</span>
+      <span class="etiqueta">Con informe de errores</span>
+    </div>
+    <div class="tarjeta">
+      <span class="numero">{{ stats.leidos }}</span>
+      <span class="etiqueta">Marcados como leídos</span>
+    </div>
+    <div class="tarjeta {{ 'ok' if total_errores == 0 else 'fallo' }}">
+      <span class="numero">{{ total_errores }}</span>
+      <span class="etiqueta">Total de errores</span>
+    </div>
+  </div>
+
+  {% if resultados %}
+    <!-- ===== Gráfico de barras Bien / Mal ===== -->
+    <div class="grafico">
+      <div class="barra">
+        <div class="segmento verde" style="width: {{ porc_bien }}%"></div>
+        <div class="segmento rojo" style="width: {{ porc_mal }}%"></div>
+      </div>
+      <div class="leyenda">
+        <span class="verde-texto">✔ Bien: {{ porc_bien }}%</span>
+        <span class="rojo-texto">✘ Mal: {{ porc_mal }}%</span>
+      </div>
+    </div>
+
+    <!-- ===== Tabla de resultados ===== -->
+    <table class="tabla">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th class="col-origen">Origen (Asunto)</th>
+          <th>Fecha</th>
+          <th class="col-errores">Errores</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in resultados %}
+          <tr class="{{ 'fila-bien' if r.errores == 0 else ('fila-media' if r.errores <= 3 else 'fila-mal') }}">
+            <td class="centro">{{ loop.index }}</td>
+            <td>{{ r.asunto }}</td>
+            <td class="centro fecha">{{ r.fecha }}</td>
+            <td class="centro">
+              {% if r.errores == 0 %}
+                <span class="chip verde">✔ {{ r.errores }}</span>
+              {% elif r.errores <= 3 %}
+                <span class="chip amarillo">💩 {{ r.errores }}</span>
+              {% else %}
+                <span class="chip rojo">✘ {{ r.errores }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if total_errores > 0 %}
+      <p class="mensaje final-fallo">🔴 Se detectaron un total de {{ total_errores }} errores 🛠️</p>
+    {% else %}
+      <p class="mensaje final-ok">🟢 ¡Todo está bien! No se detectaron errores 😄</p>
+    {% endif %}
+  {% else %}
+    <div class="vacio">
+      <p>😊 No hay mensajes con informe de errores</p>
+    </div>
+  {% endif %}
+  <script>
+    // Al pulsar "Repetir revisión" mostramos el indicador de carga.
+    document.querySelectorAll('a.btn-repetir').forEach(enlace => {
+      enlace.addEventListener('click', () => {
+        document.getElementById('cargando').hidden = false;
+      });
+    });
+  </script>
+</body>
+</html>
